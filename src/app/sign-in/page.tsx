@@ -3,10 +3,8 @@
 import { FormEvent, useState } from "react";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
 
 export default function SignInPage() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -17,11 +15,28 @@ export default function SignInPage() {
     setError(null);
     setIsSubmitting(true);
 
-    const result = await signIn("credentials", {
-      username,
-      password,
-      redirect: false,
+    const timeout = new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error("Sign in timed out.")), 15000);
     });
+
+    const result = await Promise.race([
+      signIn("credentials", {
+        username,
+        password,
+        redirect: false,
+      }),
+      timeout,
+    ]).catch((signInError) => {
+      setError(
+        signInError instanceof Error && signInError.message === "Sign in timed out."
+          ? "Sign in timed out. Please check that the backend is running, then try again."
+          : "Sign in failed. Please try again."
+      );
+      setIsSubmitting(false);
+      return null;
+    });
+
+    if (!result) return;
 
     if (result?.error) {
       setError("Invalid username or password.");
@@ -29,8 +44,7 @@ export default function SignInPage() {
       return;
     }
 
-    router.push("/");
-    router.refresh();
+    window.location.assign("/");
   };
 
   return (

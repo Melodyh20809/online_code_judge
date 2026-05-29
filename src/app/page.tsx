@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useSession } from "next-auth/react";
 
 export default function Home() {
@@ -12,16 +12,10 @@ export default function Home() {
   const goPath = useMemo(() => {
     if (!user) return "/";
     const role = user.role;
-    if (role === "ADMIN" || role === "EXAMINER") return "/examiner";
-    if (role === "QUESTIONER") return "/questioner";
+    if (role === "ADMIN" || role === "QUESTIONER") return "/questioner";
+    if (role === "EXAMINER") return "/examiner";
     return `/candidates/${user._id}`;
   }, [user]);
-
-  useEffect(() => {
-    if (status === "authenticated" && goPath !== "/") {
-      router.replace(goPath);
-    }
-  }, [status, goPath, router]);
 
   const handleGo = () => router.push(goPath);
 

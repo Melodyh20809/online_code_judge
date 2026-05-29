@@ -1,11 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
-import { useFakeCurrentUser } from "@/hooks/useFakeCurrentUser";
-import { useMockData } from "@/hooks/useMockData";
+import {
+  createProblem,
+  deleteProblem,
+  getProblemDetail,
+  getProblemResults,
+  getProblems,
+} from "@/lib/problemApi";
+import type { ApiDifficulty } from "@/types/problem";
 
 type Difficulty = "Easy" | "Medium" | "Hard";
+type DifficultyFilter = Difficulty | "All";
+type SortOption = "newest" | "oldest" | "passRateDesc" | "passRateAsc";
 
 type TestCase = {
   id: number;
@@ -22,7 +31,8 @@ type QuestionForm = {
   exampleAns: string;
   testCases: TestCase[];
   timeLimitMs: number;
-  authorUserId: number | string;
+  authorUsername: string;
+  passRate: number;
 };
 
 type QuestionResultStats = {
@@ -35,12 +45,15 @@ type QuestionResultStats = {
     id: string;
     name: string;
     email: string;
-    status: "Pending";
+    status: "Pending" | "Submitted" | "Accepted" | "Failed";
+    passedCases: number;
+    totalCases: number;
+    score?: number;
+    submittedAt?: string;
   }>;
 };
 
-//查看測試結果的數據(建立空白題目表單)
-const createEmptyForm = (authorUserId: number | string): QuestionForm => ({
+const createEmptyForm = (): QuestionForm => ({
   id: 0,
   title: "",
   difficulty: "Easy",
@@ -53,78 +66,154 @@ const createEmptyForm = (authorUserId: number | string): QuestionForm => ({
       input: "",
       expectedOutput: "",
     },
+    {
+      id: 2,
+      input: "",
+      expectedOutput: "",
+    },
   ],
   timeLimitMs: 1000,
-  authorUserId,
+  authorUsername: "",
+  passRate: 0,
 });
 
-export default function QuestionerPage() {
-  const { currentUser, isLoading: isLoadingUser } = useFakeCurrentUser();
-  const { assignments, questions, users, isLoading: isLoadingData } = useMockData();
+const apiDifficultyToUi = (difficulty: ApiDifficulty): Difficulty => {
+  if (difficulty === "MEDIUM") return "Medium";
+  if (difficulty === "HARD") return "Hard";
+  return "Easy";
+};
 
-  const [form, setForm] = useState<QuestionForm>(() => createEmptyForm(0));
-  const [editingQuestionId, setEditingQuestionId] = useState<number | null>(null);
+const uiDifficultyToApi = (difficulty: Difficulty): ApiDifficulty => {
+  if (difficulty === "Medium") return "MEDIUM";
+  if (difficulty === "Hard") return "HARD";
+  return "EASY";
+};
+
+export default function QuestionerPage() {
+  const { data: session, status } = useSession();
+  const sessionUser = session?.user ?? null;
+  const isAuthenticated = status === "authenticated";
+  const isLoadingUser = status === "loading";
+  const canManageProblems = sessionUser?.role === "ADMIN";
+  const accessToken = sessionUser?.accessToken;
+
+  const [form, setForm] = useState<QuestionForm>(() => createEmptyForm());
   const [questionList, setQuestionList] = useState<QuestionForm[]>([]);
-  //查看測試結果的數據(目前開啟彈出視窗的題目ID)
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>("All");
+  const [sortOption, setSortOption] = useState<SortOption>("oldest");
   const [resultQuestionId, setResultQuestionId] = useState<number | null>(null);
+  const [resultStatsByQuestionId, setResultStatsByQuestionId] = useState<
+    Record<number, QuestionResultStats>
+  >({});
 
   useEffect(() => {
-    setQuestionList(
-      questions.map((question) => ({
-        id: question.id,
-        title: question.title,
-        difficulty: "Easy",
-        prompt: question.prompt,
-        example: question.example,
-        exampleAns: question.exampleAns,
-        testCases: [
-          {
-            id: 1,
-            input: question.testcase,
-            expectedOutput: question.testcaseAns,
-          },
-        ],
-        timeLimitMs: 1000,
-        authorUserId: question.authorUserId,
-      }))
-    );
-  }, [questions]);
+    if (!isAuthenticated || !canManageProblems) {
+      setIsLoadingData(false);
+      return;
+    }
 
-  //查看測試結果的數據(依照每題整理統計數據)
-  const resultStatsByQuestionId = useMemo<Record<number, QuestionResultStats>>(() => {
-    return questionList.reduce<Record<number, QuestionResultStats>>((stats, question) => {
-      const relatedAssignments = assignments.filter(
-        (assignment) => assignment.questionId === question.id
-      );
+    let isMounted = true;
 
-      //查看測試結果的數據(目前後端尚未儲存提交結果所以先顯示Pending)
-      stats[question.id] = {
-        assignedCount: relatedAssignments.length,
-        submittedCount: 0,
-        acceptedCount: 0,
-        failedCount: 0,
-        passRate: 0,
-        candidates: relatedAssignments.map((assignment) => {
-          const user = users.find((candidate) => candidate.id === assignment.userId);
+    const loadProblems = async () => {
+      try {
+        setIsLoadingData(true);
+        setLoadError(null);
 
-          return {
-            id: assignment.userId,
-            name: user?.username ?? `User ${assignment.userId}`,
-            email: user?.email ?? "",
-            status: "Pending",
-          };
-        }),
-      };
+        const problemList = await getProblems();
+        const problemDetails = await Promise.all(
+          problemList.map(async (problem) => {
+            const id = problem.id;
+            const detail = await getProblemDetail(id);
 
-      return stats;
-    }, {});
-  }, [assignments, questionList, users]);
+            return {
+              id,
+              title: detail.title,
+              difficulty: apiDifficultyToUi(detail.difficulty ?? "EASY"),
+              prompt: detail.prompt,
+              example: detail.example,
+              exampleAns: detail.exampleAns,
+              testCases: detail.testCases?.length
+                ? detail.testCases.map((testCase, index) => ({
+                    id: Number(testCase.id ?? index + 1),
+                    input: testCase.input,
+                    expectedOutput: testCase.expectedOutput,
+                  }))
+                : [
+                    {
+                      id: 1,
+                      input: detail.testcase,
+                      expectedOutput: detail.testcaseAns,
+                    },
+                  ],
+              timeLimitMs: detail.timeLimitMs ?? 1000,
+              authorUsername: detail.author?.name ?? detail.author?.email ?? "Backend",
+              passRate: 0,
+            };
+          })
+        );
 
-  //查看測試結果的數據(彈出視窗目前選到的題目)
+        if (!isMounted) return;
+        setQuestionList(problemDetails);
+      } catch (error) {
+        if (!isMounted) return;
+        setLoadError(error instanceof Error ? error.message : "Failed to load problems.");
+      } finally {
+        if (!isMounted) return;
+        setIsLoadingData(false);
+      }
+    };
+
+    void loadProblems();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [canManageProblems, isAuthenticated]);
+
+  useEffect(() => {
+    if (!resultQuestionId) return;
+
+    let isMounted = true;
+    void getProblemResults(resultQuestionId).then((stats) => {
+      if (!isMounted) return;
+      setResultStatsByQuestionId((prev) => ({
+        ...prev,
+        [resultQuestionId]: stats,
+      }));
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [resultQuestionId]);
+
   const resultQuestion =
     questionList.find((question) => question.id === resultQuestionId) ?? null;
-  //查看測試結果的數據(彈出視窗目前選到題目的統計)
   const resultStats = resultQuestion ? resultStatsByQuestionId[resultQuestion.id] : null;
+
+  const displayedQuestions = useMemo(() => {
+    const filteredQuestions =
+      difficultyFilter === "All"
+        ? questionList
+        : questionList.filter((question) => question.difficulty === difficultyFilter);
+
+    return [...filteredQuestions].sort((a, b) => {
+      const newestFirst = b.id - a.id;
+
+      if (sortOption === "newest") return newestFirst;
+      if (sortOption === "oldest") return a.id - b.id;
+
+      const aPassRate = resultStatsByQuestionId[a.id]?.passRate ?? a.passRate;
+      const bPassRate = resultStatsByQuestionId[b.id]?.passRate ?? b.passRate;
+
+      if (aPassRate === bPassRate) return newestFirst;
+      return sortOption === "passRateDesc" ? bPassRate - aPassRate : aPassRate - bPassRate;
+    });
+  }, [difficultyFilter, questionList, resultStatsByQuestionId, sortOption]);
 
   const updateForm = <K extends keyof QuestionForm>(key: K, value: QuestionForm[K]) => {
     setForm((prev) => ({
@@ -170,54 +259,86 @@ export default function QuestionerPage() {
     }));
   };
 
-  const handleSaveQuestion = () => {
-    if (!currentUser) return;
+  const handleSaveQuestion = async () => {
+    if (!sessionUser) return;
+    if (!form.title.trim() || !form.prompt.trim()) return;
 
-    if (!form.title.trim() || !form.prompt.trim()) {
-      return;
-    }
+    try {
+      setIsSubmitting(true);
+      setSubmitError(null);
 
-    if (editingQuestionId) {
-      setQuestionList((prev) =>
-        prev.map((question) =>
-          question.id === editingQuestionId
-            ? {
-                ...form,
-                id: editingQuestionId,
-                authorUserId: question.authorUserId,
-              }
-            : question
-        )
+      const firstTestCase = form.testCases[0] ?? {
+        input: "",
+        expectedOutput: "",
+      };
+      const createdProblem = await createProblem(
+        {
+          title: form.title.trim(),
+          difficulty: uiDifficultyToApi(form.difficulty),
+          prompt: form.prompt.trim(),
+          example: form.example.trim(),
+          exampleAns: form.exampleAns.trim(),
+          testcase: firstTestCase.input.trim(),
+          testcaseAns: firstTestCase.expectedOutput.trim(),
+          authorUserId: 0,
+          timeLimitMs: form.timeLimitMs,
+          testCases: form.testCases.map((testCase) => ({
+            input: testCase.input.trim(),
+            expectedOutput: testCase.expectedOutput.trim(),
+            isHidden: false,
+          })),
+        },
+        accessToken
       );
-    } else {
+
+      const detail = await getProblemDetail(createdProblem.id);
+
       const newQuestion: QuestionForm = {
-        ...form,
-        id: Date.now(),
-        authorUserId: currentUser.id,
+        id: detail.id,
+        title: detail.title,
+        difficulty: apiDifficultyToUi(detail.difficulty ?? uiDifficultyToApi(form.difficulty)),
+        prompt: detail.prompt,
+        example: detail.example,
+        exampleAns: detail.exampleAns,
+        testCases: detail.testCases?.length
+          ? detail.testCases.map((testCase, index) => ({
+              id: Number(testCase.id ?? index + 1),
+              input: testCase.input,
+              expectedOutput: testCase.expectedOutput,
+            }))
+          : [
+              {
+                id: 1,
+                input: detail.testcase,
+                expectedOutput: detail.testcaseAns,
+              },
+            ],
+        timeLimitMs: detail.timeLimitMs ?? form.timeLimitMs,
+        authorUsername: sessionUser.name ?? sessionUser.email ?? "Backend",
+        passRate: 0,
       };
 
       setQuestionList((prev) => [...prev, newQuestion]);
-    }
 
-    setForm(createEmptyForm(currentUser.id));
-    setEditingQuestionId(null);
+      setForm(createEmptyForm());
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "Failed to save problem.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleEditQuestion = (question: QuestionForm) => {
-    setForm(question);
-    setEditingQuestionId(question.id);
-  };
+  const handleDeleteQuestion = async (questionId: number) => {
+    try {
+      setSubmitError(null);
+      await deleteProblem(questionId, accessToken);
+      setQuestionList((prev) => prev.filter((question) => question.id !== questionId));
 
-  const handleDeleteQuestion = (questionId: number) => {
-    setQuestionList((prev) => prev.filter((question) => question.id !== questionId));
-
-    if (editingQuestionId === questionId && currentUser) {
-      setForm(createEmptyForm(currentUser.id));
-      setEditingQuestionId(null);
-    }
-
-    if (resultQuestionId === questionId) {
-      setResultQuestionId(null);
+      if (resultQuestionId === questionId) {
+        setResultQuestionId(null);
+      }
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "Failed to delete problem.");
     }
   };
 
@@ -225,7 +346,7 @@ export default function QuestionerPage() {
     return <div className="p-8">Loading...</div>;
   }
 
-  if (!currentUser || (currentUser.role !== "ADMIN" && currentUser.role !== "QUESTIONER")) {
+  if (!isAuthenticated || !sessionUser || !canManageProblems) {
     return <div className="p-8">You do not have access rights.</div>;
   }
 
@@ -233,9 +354,46 @@ export default function QuestionerPage() {
     <div className="space-y-6 p-6">
       <h1 className="text-2xl font-semibold">Questioner Console</h1>
       <p className="text-sm text-muted-foreground">
-        Current test user: {currentUser.username}. The written-by-me flag is based on
-        question.authorUserId.
+        Current backend user: {sessionUser.username}. Problems are loaded from the v1 backend API.
       </p>
+      {loadError && <p className="text-sm text-red-500">{loadError}</p>}
+      {submitError && <p className="text-sm text-red-500">{submitError}</p>}
+
+      <div className="flex flex-col gap-4 rounded-md border bg-[var(--sidebar-accent)] p-4 sm:flex-row sm:items-end">
+        <div className="space-y-2">
+          <label htmlFor="difficulty-filter" className="text-sm font-medium">
+            Difficulty Filter
+          </label>
+          <select
+            id="difficulty-filter"
+            value={difficultyFilter}
+            onChange={(event) => setDifficultyFilter(event.target.value as DifficultyFilter)}
+            className="h-10 w-full rounded-md border bg-background px-3 text-sm sm:w-48"
+          >
+            <option value="All">All</option>
+            <option value="Easy">Easy</option>
+            <option value="Medium">Medium</option>
+            <option value="Hard">Hard</option>
+          </select>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor="question-sort" className="text-sm font-medium">
+            Sort By
+          </label>
+          <select
+            id="question-sort"
+            value={sortOption}
+            onChange={(event) => setSortOption(event.target.value as SortOption)}
+            className="h-10 w-full rounded-md border bg-background px-3 text-sm sm:w-56"
+          >
+            <option value="newest">Newest to Oldest</option>
+            <option value="oldest">Oldest to Newest</option>
+            <option value="passRateDesc">Pass Rate High to Low</option>
+            <option value="passRateAsc">Pass Rate Low to High</option>
+          </select>
+        </div>
+      </div>
 
       <div className="overflow-hidden rounded-md border">
         <table className="w-full text-sm">
@@ -245,27 +403,35 @@ export default function QuestionerPage() {
               <th className="px-4 py-3 text-left">Title</th>
               <th className="px-4 py-3 text-left">Difficulty</th>
               <th className="px-4 py-3 text-left">Time Limit</th>
-              <th className="px-4 py-3 text-left">Written by me</th>
+              <th className="px-4 py-3 text-left">Pass Rate</th>
+              <th className="px-4 py-3 text-left">Source</th>
               <th className="px-4 py-3 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {questionList.map((question) => (
+            {displayedQuestions.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">
+                  No questions match the selected filters.
+                </td>
+              </tr>
+            )}
+            {displayedQuestions.map((question) => (
               <tr key={question.id} className="border-t">
                 <td className="px-4 py-3">{question.id}</td>
                 <td className="px-4 py-3">{question.title}</td>
                 <td className="px-4 py-3">{question.difficulty}</td>
                 <td className="px-4 py-3">{question.timeLimitMs} ms</td>
                 <td className="px-4 py-3">
-                  {question.authorUserId === currentUser.id ? "Yes" : "No"}
+                  {(resultStatsByQuestionId[question.id]?.passRate ?? question.passRate).toFixed(0)}%
                 </td>
+                <td className="px-4 py-3">{question.authorUsername}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
                     <Button
                       type="button"
                       variant="secondary"
                       size="sm"
-                      //查看測試結果的數據(開啟該題結果彈出視窗)
                       onClick={() => setResultQuestionId(question.id)}
                     >
                       Results
@@ -273,18 +439,9 @@ export default function QuestionerPage() {
 
                     <Button
                       type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleEditQuestion(question)}
-                    >
-                      Edit
-                    </Button>
-
-                    <Button
-                      type="button"
                       variant="destructive"
                       size="sm"
-                      onClick={() => handleDeleteQuestion(question.id)}
+                      onClick={() => void handleDeleteQuestion(question.id)}
                     >
                       Delete
                     </Button>
@@ -297,9 +454,10 @@ export default function QuestionerPage() {
       </div>
 
       <section className="rounded-md border bg-[var(--sidebar-accent)] p-4">
-        <h2 className="font-semibold">
-          {editingQuestionId ? "Edit Question" : "Create Question"}
-        </h2>
+        <h2 className="font-semibold">Create Question</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Test cases are sent to the backend as visible sample cases for the problem detail page.
+        </p>
 
         <div className="mt-4 space-y-4">
           <div className="space-y-2">
@@ -316,9 +474,7 @@ export default function QuestionerPage() {
             <label className="text-sm font-medium">Difficulty</label>
             <select
               value={form.difficulty}
-              onChange={(event) =>
-                updateForm("difficulty", event.target.value as Difficulty)
-              }
+              onChange={(event) => updateForm("difficulty", event.target.value as Difficulty)}
               className="h-10 w-full rounded-md border bg-background px-3 text-sm"
             >
               <option value="Easy">Easy</option>
@@ -364,9 +520,7 @@ export default function QuestionerPage() {
               min={100}
               step={100}
               value={form.timeLimitMs}
-              onChange={(event) =>
-                updateForm("timeLimitMs", Number(event.target.value))
-              }
+              onChange={(event) => updateForm("timeLimitMs", Number(event.target.value))}
               className="h-10 w-full rounded-md border bg-background px-3 text-sm"
             />
           </div>
@@ -419,17 +573,15 @@ export default function QuestionerPage() {
           </div>
 
           <div className="flex gap-2">
-            <Button type="button" onClick={handleSaveQuestion}>
-              {editingQuestionId ? "Save Changes" : "Create Question"}
+            <Button type="button" onClick={() => void handleSaveQuestion()} disabled={isSubmitting}>
+              {isSubmitting ? "Saving..." : "Create Question"}
             </Button>
 
             <Button
               type="button"
               variant="outline"
               onClick={() => {
-                if (!currentUser) return;
-                setForm(createEmptyForm(currentUser.id));
-                setEditingQuestionId(null);
+                setForm(createEmptyForm());
               }}
             >
               Cancel
@@ -439,7 +591,6 @@ export default function QuestionerPage() {
       </section>
 
       {resultQuestion && resultStats && (
-        //查看測試結果的數據(結果彈出視窗背景遮罩)
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           role="dialog"
@@ -448,7 +599,6 @@ export default function QuestionerPage() {
           onClick={() => setResultQuestionId(null)}
         >
           <div
-            //查看測試結果的數據(結果彈出視窗內容)
             className="max-h-[85vh] w-full max-w-4xl overflow-y-auto rounded-md border bg-background shadow-lg"
             onClick={(event) => event.stopPropagation()}
           >
@@ -461,14 +611,18 @@ export default function QuestionerPage() {
                   Question ID: {resultQuestion.id}
                 </p>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setResultQuestionId(null)}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setResultQuestionId(null)}
+              >
                 Close
               </Button>
             </div>
 
             <div className="space-y-5 p-5">
               <div className="grid gap-3 md:grid-cols-5">
-                {/* //查看測試結果的數據(統計卡片區塊) */}
                 <div className="rounded-md border p-3">
                   <p className="text-sm text-muted-foreground">Assigned</p>
                   <p className="mt-1 text-2xl font-semibold">{resultStats.assignedCount}</p>
@@ -495,8 +649,11 @@ export default function QuestionerPage() {
                 </div>
               </div>
 
+              <p className="text-sm text-muted-foreground">
+                Results are assembled from existing assignments and candidate submission history.
+              </p>
+
               <div className="rounded-md border">
-                {/* //查看測試結果的數據(該題測試案例列表) */}
                 <div className="border-b bg-[var(--sidebar-accent)] px-4 py-3 font-semibold">
                   Test Cases
                 </div>
@@ -521,20 +678,20 @@ export default function QuestionerPage() {
               </div>
 
               <div className="overflow-x-auto rounded-md border">
-                {/* //查看測試結果的數據(候選人結果列表) */}
                 <table className="w-full text-sm">
                   <thead className="bg-[var(--sidebar-accent)]">
                     <tr>
                       <th className="px-4 py-3 text-left">Candidate</th>
                       <th className="px-4 py-3 text-left">Email</th>
                       <th className="px-4 py-3 text-left">Status</th>
-                      <th className="px-4 py-3 text-left">Passed Cases</th>
+                      <th className="px-4 py-3 text-left">Score</th>
+                      <th className="px-4 py-3 text-left">Submitted At</th>
                     </tr>
                   </thead>
                   <tbody>
                     {resultStats.candidates.length === 0 ? (
                       <tr>
-                        <td colSpan={4} className="px-4 py-6 text-center text-muted-foreground">
+                        <td colSpan={5} className="px-4 py-6 text-center text-muted-foreground">
                           No assigned candidates.
                         </td>
                       </tr>
@@ -544,7 +701,14 @@ export default function QuestionerPage() {
                           <td className="px-4 py-3">{candidate.name}</td>
                           <td className="px-4 py-3">{candidate.email || "N/A"}</td>
                           <td className="px-4 py-3 text-muted-foreground">{candidate.status}</td>
-                          <td className="px-4 py-3">0/{resultQuestion.testCases.length}</td>
+                          <td className="px-4 py-3">
+                            {candidate.score ?? "N/A"}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {candidate.submittedAt
+                              ? new Date(candidate.submittedAt).toLocaleString("en-US")
+                              : "N/A"}
+                          </td>
                         </tr>
                       ))
                     )}
