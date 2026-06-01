@@ -123,10 +123,15 @@ export const fetchMockData = async (token?: string | null): Promise<MockDbPayloa
   const usersRaw = usersRes.ok ? await usersRes.json() : [];
   const usersList = extractList(usersRaw);
   const users = (usersList as Array<Record<string, unknown>>).map((u) => {
-    let role = "CANDIDATE";
-    if (u.isAdmin) role = "ADMIN";
-    else if (u.isExaminer) role = "EXAMINER";
-    else if (u.isQuestioner) role = "QUESTIONER";
+    const rawRole = String(u.role ?? "").toUpperCase();
+    let role = rawRole || "CANDIDATE";
+    if (!rawRole) {
+      if (u.isAdmin) role = "ADMIN";
+      else if (u.isExaminer) role = "EXAMINER";
+      else if (u.isQuestioner) role = "QUESTIONER";
+      else if (u.isCandidate) role = "CANDIDATE";
+    }
+
     return {
       id: String(u.id),
       username: (u.username ?? u.name ?? u.email ?? "") as string,
@@ -203,7 +208,11 @@ export const fetchMockData = async (token?: string | null): Promise<MockDbPayloa
 // Request: { jobRole: string, examinerEmpId: string }
 // Response: { id: 1, jobRole: "...", examinerEmpId: "..." }
 export const createInterview = async (
-  payload: { jobRole: string; examinerEmpId: string },
+  payload: {
+    jobRole: string;
+    candidateUserId?: string;
+    problemCounts?: { easy?: number; medium?: number; hard?: number };
+  },
   token?: string | null
 ): Promise<MockInterview> => {
   const response = await fetch(`${API_BASE_URL}/api/v1/interviews`, {
@@ -212,7 +221,16 @@ export const createInterview = async (
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`Failed to create interview: ${response.status}`);
+    let details = "";
+    try {
+      const errBody = await response.json();
+      details = Array.isArray(errBody?.message)
+        ? errBody.message.join(", ")
+        : String(errBody?.message ?? "");
+    } catch {
+      details = await response.text();
+    }
+    throw new Error(`Failed to create interview: ${response.status}${details ? ` - ${details}` : ""}`);
   }
   const raw = await response.json();
   return {

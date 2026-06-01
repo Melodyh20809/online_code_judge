@@ -8,8 +8,8 @@ type AuthToken = {
 
 const getHomePathFromToken = (token: AuthToken | null) => {
   const role = token?.role;
-  if (role === "ADMIN" || role === "EXAMINER") return "/examiner";
-  if (role === "QUESTIONER") return "/questioner";
+  if (role === "ADMIN" || role === "QUESTIONER") return "/questioner";
+  if (role === "EXAMINER") return "/examiner";
   if (role === "USER" || role === "CANDIDATE") return `/candidates/${token?._id}`;
   return `/candidates/${token?._id}`;
 };
@@ -23,11 +23,9 @@ export async function middleware(request: NextRequest) {
 
   if (
     token &&
-    (url.pathname === "/" ||
-      url.pathname.startsWith("/sign-in") ||
-      url.pathname.startsWith("/sign-up"))
+    (url.pathname.startsWith("/sign-in") || url.pathname.startsWith("/sign-up"))
   ) {
-    return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
+    return NextResponse.redirect(new URL("/", request.url));
   }
 
   const isProtected =
@@ -77,7 +75,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/",
     "/sign-in",
     "/sign-up",
     "/examiner/:path*",

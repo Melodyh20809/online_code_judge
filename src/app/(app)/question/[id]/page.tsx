@@ -8,6 +8,7 @@ import axios from "axios";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMockData } from "@/hooks/useMockData";
 import { canAccessQuestion } from "@/lib/access";
+import { getCandidateAssignments, type CandidateAssignment } from "@/lib/candidateApi";
 import { getQuestionById, fetchQuestionDetail, type QuestionDetail } from "@/lib/mockData";
 import { toast } from "sonner";
 
@@ -27,12 +28,15 @@ type SubmissionResult = {
 };
 
 const statusConfig: Record<string, { label: string; color: string }> = {
+  PENDING: { label: "Pending", color: "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300" },
   ACCEPTED: { label: "Accepted", color: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-400" },
   WRONG_ANSWER: { label: "Wrong Answer", color: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400" },
   TLE: { label: "Time Limit Exceeded", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-400" },
+  TIME_LIMIT_EXCEEDED: { label: "Time Limit Exceeded", color: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-400" },
   MLE: { label: "Memory Limit Exceeded", color: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-400" },
   RUNTIME_ERROR: { label: "Runtime Error", color: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-400" },
   COMPILE_ERROR: { label: "Compile Error", color: "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300" },
+  INTERNAL_ERROR: { label: "Internal Error", color: "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300" },
 };
 const FINAL_STATUSES = new Set([
   "ACCEPTED",
@@ -41,6 +45,8 @@ const FINAL_STATUSES = new Set([
   "MLE",
   "RUNTIME_ERROR",
   "COMPILE_ERROR",
+  "TIME_LIMIT_EXCEEDED",
+  "INTERNAL_ERROR",
 ]);
 
 function buildStarterCode(language: string, functionName?: string) {
@@ -68,19 +74,6 @@ function buildStarterCode(language: string, functionName?: string) {
       "        return 0.0;",
       "    }",
       "};",
-      "",
-    ].join("\n");
-  }
-  if (language === "java") {
-    return [
-      "import java.util.*;",
-      "",
-      "class Solution {",
-      `    public double ${safeFunctionName}(int[] nums1, int[] nums2) {`,
-      "        // TODO: implement",
-      "        return 0.0;",
-      "    }",
-      "}",
       "",
     ].join("\n");
   }
@@ -147,7 +140,10 @@ export default function QuestionPage() {
   const [submissionHistory, setSubmissionHistory] = useState<SubmissionResult[]>([]);
   const [selectedSubmission, setSelectedSubmission] = useState<SubmissionResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
   const [questionDetail, setQuestionDetail] = useState<QuestionDetail | null>(null);
+  const [candidateAssignments, setCandidateAssignments] = useState<CandidateAssignment[]>([]);
+  const [isLoadingCandidateAssignments, setIsLoadingCandidateAssignments] = useState(false);
 
   const questionId = Number(params.id);
   const question = useMemo(() => getQuestionById(questions, questionId), [questionId, questions]);
@@ -170,7 +166,52 @@ export default function QuestionPage() {
     setLanguage(nextLanguage);
     setSourceCode(buildStarterCode(nextLanguage, questionDetail?.functionName));
   };
-  if (isLoadingUser || isLoadingData) {
+
+  const resolvedUserId =
+    users.find((u) => u.username === sessionUser?.username)?.id ??
+    users.find((u) => u.id === sessionUser?._id)?.id ??
+    sessionUser?._id ??
+    "";
+
+  useEffect(() => {
+    if (
+      !resolvedUserId ||
+      !sessionUser?.accessToken ||
+      (sessionUser.role !== "CANDIDATE" && sessionUser.role !== "USER")
+    ) {
+      setCandidateAssignments([]);
+      setIsLoadingCandidateAssignments(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadAssignments = async () => {
+      try {
+        setIsLoadingCandidateAssignments(true);
+        const loadedAssignments = await getCandidateAssignments(
+          resolvedUserId,
+          sessionUser.accessToken
+        );
+        if (!isMounted) return;
+        setCandidateAssignments(loadedAssignments);
+      } catch {
+        if (!isMounted) return;
+        setCandidateAssignments([]);
+      } finally {
+        if (!isMounted) return;
+        setIsLoadingCandidateAssignments(false);
+      }
+    };
+
+    void loadAssignments();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [resolvedUserId, sessionUser?.accessToken, sessionUser?.role]);
+
+  if (isLoadingUser || isLoadingData || isLoadingCandidateAssignments) {
     return <div className="p-8">Loading...</div>;
   }
 
@@ -188,13 +229,12 @@ export default function QuestionPage() {
     return <div className="p-8">Please sign in.</div>;
   }
 
-  const resolvedUserId =
-    users.find((u) => u.username === sessionUser.username)?.id ??
-    users.find((u) => u.id === sessionUser._id)?.id ??
-    sessionUser._id ??
-    "";
+  const hasCandidateAssignment = candidateAssignments.some(
+    (assignment) => assignment.problemId === questionId
+  );
 
   if (
+    !hasCandidateAssignment &&
     !canAccessQuestion(
       {
         id: resolvedUserId,
@@ -291,6 +331,55 @@ export default function QuestionPage() {
       setIsSubmitting(false);
     }
   };
+
+  const handleRun = async () => {
+    if (!sessionUser || !question) {
+      toast.error("Unable to run right now.");
+      return;
+    }
+
+    setIsRunning(true);
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/api/v1/judge/run`,
+        {
+          problem_id: questionId,
+          source_code: sourceCode,
+          language,
+        },
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+
+      const result = response.data ?? {};
+      const runResult: SubmissionResult = {
+        id: `run-${Date.now()}`,
+        status: String(result.status ?? "INTERNAL_ERROR"),
+        score: Number(result.score ?? 0),
+        executionTimeMs: Number(result.executionTimeMs ?? 0) || null,
+        memoryUsageKb: null,
+        passedCases: result.status === "ACCEPTED" ? 1 : 0,
+        totalCases: 1,
+        compileMessage: String(result.stderr ?? ""),
+        submittedAt: new Date().toISOString(),
+      };
+
+      setSubmissionHistory((prev) => [runResult, ...prev]);
+      setSelectedSubmission(runResult);
+      setLeftTab("result");
+      toast.success("Sample run finished.");
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        toast.error(error.response?.data?.message || "Run failed.");
+      } else {
+        toast.error("Run failed.");
+      }
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
   const latestResult = submissionHistory[0] ?? null;
   const bestScore = submissionHistory.length > 0 ? Math.max(...submissionHistory.map((s) => s.score)) : null;
   const displayResult = selectedSubmission;
@@ -488,7 +577,6 @@ export default function QuestionPage() {
             <option value="python">Python</option>
             <option value="cpp">C++</option>
             <option value="javascript">JavaScript</option>
-            <option value="java">Java</option>
           </select>
         </div>
         <div className="h-[58vh] overflow-hidden rounded-md border">
@@ -509,14 +597,16 @@ export default function QuestionPage() {
         <div className="mt-3 flex gap-2">
           <button
             type="button"
+            onClick={handleRun}
+            disabled={isRunning || isSubmitting}
             className="rounded-md bg-primary/60 px-4 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/80"
           >
-            Run
+            {isRunning ? "Running..." : "Run"}
           </button>
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={isSubmitting || isRunning}
             className="rounded-md bg-green-600/80 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? "Submitting..." : "Submit"}
@@ -526,4 +616,3 @@ export default function QuestionPage() {
     </div>
   );
 }
-

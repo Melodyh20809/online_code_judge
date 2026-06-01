@@ -7,7 +7,30 @@ type CredentialsInput = {
   password: string;
 };
 
+type BackendJwtPayload = {
+  sub?: string;
+  username?: string;
+  role?: string;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4100";
+
+const decodeBackendJwt = (token: string): BackendJwtPayload => {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return {};
+
+    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(
+      normalizedPayload.length + ((4 - (normalizedPayload.length % 4)) % 4),
+      "="
+    );
+
+    return JSON.parse(Buffer.from(paddedPayload, "base64").toString("utf-8")) as BackendJwtPayload;
+  } catch {
+    return {};
+  }
+};
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -48,13 +71,18 @@ export const authOptions: NextAuthOptions = {
           throw new Error("Login response missing token.");
         }
 
+        const jwtPayload = decodeBackendJwt(token);
+        const backendUserId = jwtPayload.sub ?? safeCredentials.username;
+        const backendUsername = jwtPayload.username ?? safeCredentials.username;
+        const backendRole = jwtPayload.role ?? role;
+
         return {
-          id: safeCredentials.username,
-          _id: safeCredentials.username,
-          username: safeCredentials.username,
+          id: backendUserId,
+          _id: backendUserId,
+          username: backendUsername,
           email: "",
-          role,
-          empId: "",
+          role: backendRole,
+          empId: backendUserId,
           accessToken: token,
           expiresIn,
         };

@@ -214,18 +214,12 @@ export default function ExaminerPage() {
     if (!sessionUser?.username || !jobRole.trim() || !token) {
       return;
     }
-    const examiner = users.find((u) => u.username === sessionUser.username);
-    if (!examiner?.id) {
-      setSubmitError("Cannot resolve examiner user id from /api/v1/users.");
-      return;
-    }
 
     try {
       setIsSubmitting(true);
       setSubmitError(null);
       const createdInterview = await createInterview({
         jobRole: jobRole.trim(),
-        examinerEmpId: examiner.id,
       }, token);
       setLocalInterviews((prev) => [...prev, createdInterview]);
       setJobRole("");
