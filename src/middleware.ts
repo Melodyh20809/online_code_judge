@@ -1,5 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { NEXT_AUTH_SECRET } from "@/lib/authSecret";
 
 type AuthToken = {
   _id?: string;
@@ -7,7 +8,7 @@ type AuthToken = {
 };
 
 const getHomePathFromToken = (token: AuthToken | null) => {
-  const role = token?.role;
+  const role = token?.role?.toUpperCase();
   if (role === "ADMIN" || role === "QUESTIONER") return "/questioner";
   if (role === "EXAMINER") return "/examiner";
   if (role === "USER" || role === "CANDIDATE") return `/candidates/${token?._id}`;
@@ -17,7 +18,7 @@ const getHomePathFromToken = (token: AuthToken | null) => {
 export async function middleware(request: NextRequest) {
   const token = (await getToken({
     req: request,
-    secret: process.env.NEXTAUTH_SECRET,
+    secret: NEXT_AUTH_SECRET,
   })) as AuthToken | null;
   const url = request.nextUrl;
 
@@ -45,7 +46,7 @@ export async function middleware(request: NextRequest) {
 
   // Role-based guards
   if (token) {
-    const role = token.role;
+    const role = token.role?.toUpperCase();
     if (url.pathname.startsWith("/examiner") && role !== "ADMIN" && role !== "EXAMINER") {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }

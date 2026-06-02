@@ -12,7 +12,7 @@ export default function NavLinks({
 }) {
   const { data: session } = useSession();
   const user = session?.user ?? null;
-  const role = user?.role;
+  const role = user?.role?.toUpperCase();
   const links: Array<{ href: string; label: string; active: boolean }> = [
     { href: "/", label: "Home", active: pathname === "/" },
   ];
@@ -20,6 +20,13 @@ export default function NavLinks({
   if (role === "ADMIN" || role === "EXAMINER") {
     links.push({ href: "/examiner", label: "Examiner", active: pathname === "/examiner" });
     links.push({ href: "/examiner/report", label: "Report", active: pathname === "/examiner/report" });
+  }
+  if (role === "ADMIN") {
+    links.push({
+      href: "/candidate-accounts",
+      label: "Candidate Accounts",
+      active: pathname === "/candidate-accounts",
+    });
   }
   if (role === "ADMIN" || role === "QUESTIONER") {
     links.push({ href: "/questioner", label: "Questioner", active: pathname === "/questioner" });

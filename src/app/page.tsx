@@ -44,13 +44,6 @@ export default function Home() {
               >
                 Sign in
               </button>
-              <button
-                type="button"
-                onClick={() => router.push("/sign-up")}
-                className="rounded-md border px-5 py-2 text-sm font-semibold"
-              >
-                Sign up
-              </button>
             </div>
           )}
         </div>

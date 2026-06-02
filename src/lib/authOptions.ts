@@ -1,5 +1,6 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { NEXT_AUTH_SECRET } from "./authSecret";
 import { hashPasswordToSHA256 } from "./passwordHash";
 
 type CredentialsInput = {
@@ -149,5 +150,5 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
     maxAge: 1 * 24 * 60 * 60,
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: NEXT_AUTH_SECRET,
 };
