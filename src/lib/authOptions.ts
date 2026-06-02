@@ -7,7 +7,31 @@ type CredentialsInput = {
   password: string;
 };
 
+type BackendJwtPayload = {
+  sub?: string;
+  username?: string;
+  role?: string;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4100";
+const LOGIN_TIMEOUT_MS = 8_000;
+
+const decodeBackendJwt = (token: string): BackendJwtPayload => {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return {};
+
+    const normalizedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(
+      normalizedPayload.length + ((4 - (normalizedPayload.length % 4)) % 4),
+      "="
+    );
+
+    return JSON.parse(Buffer.from(paddedPayload, "base64").toString("utf-8")) as BackendJwtPayload;
+  } catch {
+    return {};
+  }
+};
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -26,17 +50,41 @@ export const authOptions: NextAuthOptions = {
 
         const hashedPassword = hashPasswordToSHA256(safeCredentials.password);
 
-        const response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: safeCredentials.username,
-            passwordSha256: hashedPassword,
-          }),
-        });
+        let response: Response;
+        try {
+          response = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS),
+            body: JSON.stringify({
+              username: safeCredentials.username,
+              passwordSha256: hashedPassword,
+            }),
+          });
+        } catch (error) {
+          const isTimeout =
+            error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+          throw new Error(
+            isTimeout
+              ? "Backend login timed out. Please try again later."
+              : "Cannot connect to backend login service."
+          );
+        }
 
         if (!response.ok) {
-          throw new Error("Invalid username or password.");
+          if (response.status === 401) {
+            throw new Error("Invalid username or password.");
+          }
+
+          let message = `Backend login failed with HTTP ${response.status}.`;
+          try {
+            const body = (await response.json()) as { message?: string | string[] };
+            if (Array.isArray(body.message)) message = body.message.join(", ");
+            if (typeof body.message === "string") message = body.message;
+          } catch {
+            // Keep the HTTP status message when the backend does not return JSON.
+          }
+          throw new Error(message);
         }
 
         const data = await response.json() as Record<string, unknown>;
@@ -48,13 +96,18 @@ export const authOptions: NextAuthOptions = {
           throw new Error("Login response missing token.");
         }
 
+        const jwtPayload = decodeBackendJwt(token);
+        const backendUserId = jwtPayload.sub ?? safeCredentials.username;
+        const backendUsername = jwtPayload.username ?? safeCredentials.username;
+        const backendRole = jwtPayload.role ?? role;
+
         return {
-          id: safeCredentials.username,
-          _id: safeCredentials.username,
-          username: safeCredentials.username,
+          id: backendUserId,
+          _id: backendUserId,
+          username: backendUsername,
           email: "",
-          role,
-          empId: "",
+          role: backendRole,
+          empId: backendUserId,
           accessToken: token,
           expiresIn,
         };

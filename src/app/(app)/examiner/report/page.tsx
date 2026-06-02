@@ -28,8 +28,11 @@ type Submission = {
 type Candidate = {
   id: number;
   userId: string;
+  jobId: number;
   name: string;
   email: string;
+  startTime: number | null;
+  endTime: number | null;
 };
 
 type Problem = {
@@ -49,6 +52,8 @@ type Assignment = {
   userId: string;
   problemId: number;
 };
+
+type CandidateTimeStatus = "NOT_SCHEDULED" | "BEFORE_START" | "IN_PROGRESS" | "ENDED";
 
 // ── Helpers ────────────────────────────────────────────────
 const statusConfig: Record<string, { label: string; color: string }> = {
@@ -82,6 +87,62 @@ function difficultyRank(level: string): number {
   if (v === "MEDIUM") return 2;
   if (v === "HARD") return 3;
   return 99;
+}
+
+function getCandidateTimeStatus(
+  startTime: number | null,
+  endTime: number | null,
+  serverTime = Math.floor(Date.now() / 1000)
+): CandidateTimeStatus {
+  if (startTime == null || endTime == null) {
+    return "NOT_SCHEDULED";
+  }
+  if (serverTime < startTime) {
+    return "BEFORE_START";
+  }
+  if (serverTime <= endTime) {
+    return "IN_PROGRESS";
+  }
+  return "ENDED";
+}
+
+function submissionTimestamp(createdAt: string): number {
+  const parsed = Date.parse(createdAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function pickPreferredSubmission(submissions: Submission[]): Submission | undefined {
+  return submissions.reduce<Submission | undefined>((best, current) => {
+    if (!best) {
+      return current;
+    }
+    if (current.score > best.score) {
+      return current;
+    }
+    if (current.score < best.score) {
+      return best;
+    }
+    return submissionTimestamp(current.createdAt) > submissionTimestamp(best.createdAt)
+      ? current
+      : best;
+  }, undefined);
+}
+
+function isSubmissionWithinWindow(
+  submission: Submission,
+  startTime: number | null,
+  endTime: number | null
+): boolean {
+  if (startTime == null || endTime == null) {
+    return false;
+  }
+  const submittedAt = submissionTimestamp(submission.createdAt);
+  if (submittedAt === 0) {
+    return false;
+  }
+  const windowStart = startTime * 1000;
+  const windowEnd = endTime * 1000;
+  return submittedAt >= windowStart && submittedAt <= windowEnd;
 }
 
 // ── Component ──────────────────────────────────────────────
@@ -171,14 +232,22 @@ function ExaminerReportContent() {
               jobId: Number(c.jobId ?? c.job_id ?? 0),
               name: String(user?.username ?? user?.name ?? userId),
               email: String(user?.email ?? ""),
-            } as Candidate & { jobId: number };
+              startTime:
+                c.startTime == null || c.startTime === ""
+                  ? null
+                  : Number(c.startTime),
+              endTime:
+                c.endTime == null || c.endTime === ""
+                  ? null
+                  : Number(c.endTime),
+            };
           })
-          .filter((c) => Number.isFinite((c as Candidate & { jobId: number }).jobId))
+          .filter((c) => Number.isFinite(c.jobId))
           .filter(
             (c, index, arr) =>
               arr.findIndex(
                 (x) =>
-                  (x as Candidate & { jobId: number }).jobId === (c as Candidate & { jobId: number }).jobId &&
+                  x.jobId === c.jobId &&
                   x.userId === c.userId
               ) === index
           );
@@ -250,20 +319,41 @@ function ExaminerReportContent() {
     .filter(
       (c, index, arr) => arr.findIndex((x) => x.userId === c.userId) === index
     );
+  const candidateWindowByUserId = new Map(
+    interviewCandidates.map((candidate) => [
+      candidate.userId,
+      { startTime: candidate.startTime, endTime: candidate.endTime },
+    ])
+  );
+  const interviewSubmissions = submissions.filter((submission) => {
+    const window = candidateWindowByUserId.get(String(submission.userId));
+    if (!window) {
+      return false;
+    }
+    return isSubmissionWithinWindow(submission, window.startTime, window.endTime);
+  });
 
   // Compute stats per candidate
   const candidateStats = interviewCandidates.map((c) => {
     const candidateAssignedProblemIds = new Set(
       assignedRows.filter((a) => a.userId === c.userId).map((a) => a.problemId)
     );
-    const subs = submissions.filter(
+    const subs = interviewSubmissions.filter(
       (s) => String(s.userId) === c.userId && candidateAssignedProblemIds.has(s.problemId)
     );
     const totalProblems = candidateAssignedProblemIds.size;
     const attempted = new Set(subs.map((s) => s.problemId)).size;
     const accepted = new Set(subs.filter((s) => s.status === "ACCEPTED").map((s) => s.problemId)).size;
-    const avgScore = subs.length > 0 ? Math.round(subs.reduce((sum, s) => sum + s.score, 0) / subs.length) : 0;
-    return { ...c, subs, totalProblems, attempted, accepted, avgScore, candidateAssignedProblemIds };
+    const bestScoresByProblem = Array.from(candidateAssignedProblemIds).map((problemId) =>
+      subs
+        .filter((submission) => submission.problemId === problemId)
+        .reduce((best, submission) => Math.max(best, submission.score), 0)
+    );
+    const totalScore = bestScoresByProblem.reduce((sum, score) => sum + score, 0);
+    const avgScore = totalProblems > 0 ? Math.round(totalScore / totalProblems) : 0;
+    const timeStatus = getCandidateTimeStatus(c.startTime, c.endTime);
+    const completedAll = totalProblems > 0 && bestScoresByProblem.every((score) => score === 100);
+    return { ...c, subs, totalProblems, attempted, accepted, avgScore, candidateAssignedProblemIds, timeStatus, completedAll };
   });
 
   // Sort
@@ -278,7 +368,7 @@ function ExaminerReportContent() {
     const assignedUserIdsForProblem = new Set(
       assignedRows.filter((a) => a.problemId === p.id).map((a) => a.userId)
     );
-    const subs = submissions.filter(
+    const subs = interviewSubmissions.filter(
       (s) => s.problemId === p.id && assignedUserIdsForProblem.has(String(s.userId))
     );
     const acceptedCount = subs.filter((s) => s.status === "ACCEPTED").length;
@@ -295,8 +385,9 @@ function ExaminerReportContent() {
 
   // Overview
   const totalCandidates = interviewCandidates.length;
-  const completedAll = candidateStats.filter((c) => c.accepted === c.totalProblems).length;
-  const notStarted = candidateStats.filter((c) => c.attempted === 0).length;
+  const completedAll = candidateStats.filter((c) => c.completedAll).length;
+  const inProgress = candidateStats.filter((c) => c.timeStatus === "IN_PROGRESS").length;
+  const notStarted = candidateStats.filter((c) => c.timeStatus === "NOT_SCHEDULED").length;
 
   return (
     <div className="space-y-6 p-6">
@@ -342,7 +433,7 @@ function ExaminerReportContent() {
         </div>
         <div className="rounded-lg border bg-[var(--sidebar-accent)] p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">In Progress</p>
-          <p className="mt-1 text-2xl font-bold text-yellow-600 dark:text-yellow-400">{totalCandidates - completedAll - notStarted}</p>
+          <p className="mt-1 text-2xl font-bold text-yellow-600 dark:text-yellow-400">{inProgress}</p>
         </div>
         <div className="rounded-lg border bg-[var(--sidebar-accent)] p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Not Started</p>
@@ -428,7 +519,9 @@ function ExaminerReportContent() {
                       {interviewProblems
                         .filter((problem) => candidate.candidateAssignedProblemIds.has(problem.id))
                         .map((problem) => {
-                        const sub = candidate.subs.find((s) => s.problemId === problem.id);
+                        const sub = pickPreferredSubmission(
+                          candidate.subs.filter((s) => s.problemId === problem.id)
+                        );
                         return (
                           <div key={problem.id} className="rounded-md border bg-background p-4">
                             <div className="flex items-center justify-between">
@@ -486,7 +579,7 @@ function ExaminerReportContent() {
       {viewMode === "problems" && (
         <div className="space-y-4">
           {problemStats.map((problem) => {
-            const subs = submissions.filter((s) => s.problemId === problem.id);
+            const subs = interviewSubmissions.filter((s) => s.problemId === problem.id);
             const assignedCandidatesForProblem = interviewCandidates.filter((candidate) =>
               assignedRows.some((a) => a.problemId === problem.id && a.userId === candidate.userId)
             );
@@ -528,7 +621,9 @@ function ExaminerReportContent() {
                 {/* Each candidate's result for this problem */}
                 <div className="mt-4 space-y-2">
                   {assignedCandidatesForProblem.map((candidate) => {
-                    const sub = subs.find((s) => String(s.userId) === candidate.userId);
+                    const sub = pickPreferredSubmission(
+                      subs.filter((s) => String(s.userId) === candidate.userId)
+                    );
                     return (
                       <div key={candidate.id} className="flex items-center justify-between rounded-md border bg-background px-3 py-2 text-sm">
                         <div className="flex items-center gap-3">

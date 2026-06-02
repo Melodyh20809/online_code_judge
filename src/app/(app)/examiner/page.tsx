@@ -9,7 +9,6 @@ import Link from "next/link";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DateTimePicker } from "@/components/ui/date-time-picker";
 
 export default function ExaminerPage() {
   const { sessionUser, isLoading: isLoadingUser, isAuthenticated } = useCurrentUser();
@@ -17,11 +16,6 @@ export default function ExaminerPage() {
     useMockData();
   const token = sessionUser?.accessToken || null;
   const [jobRole, setJobRole] = useState("");
-  const [easyCount, setEasyCount] = useState(0);
-  const [mediumCount, setMediumCount] = useState(0);
-  const [hardCount, setHardCount] = useState(0);
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [localInterviews, setLocalInterviews] = useState(interviews);
@@ -214,18 +208,12 @@ export default function ExaminerPage() {
     if (!sessionUser?.username || !jobRole.trim() || !token) {
       return;
     }
-    const examiner = users.find((u) => u.username === sessionUser.username);
-    if (!examiner?.id) {
-      setSubmitError("Cannot resolve examiner user id from /api/v1/users.");
-      return;
-    }
 
     try {
       setIsSubmitting(true);
       setSubmitError(null);
       const createdInterview = await createInterview({
         jobRole: jobRole.trim(),
-        examinerEmpId: examiner.id,
       }, token);
       setLocalInterviews((prev) => [...prev, createdInterview]);
       setJobRole("");
@@ -246,7 +234,7 @@ export default function ExaminerPage() {
             type="text"
             value={jobRole}
             onChange={(event) => setJobRole(event.target.value)}
-            placeholder="Enter job role name"
+            placeholder="enter new interview name"
             className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
           />
           <button
@@ -257,60 +245,6 @@ export default function ExaminerPage() {
           >
             {isSubmitting ? "Adding..." : "Add"}
           </button>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <div className="flex w-fit items-center gap-2 rounded-md border bg-background px-3 py-2">
-            <p className="text-sm font-medium text-muted-foreground">Easy</p>
-            <select
-              value={easyCount}
-              onChange={(e) => setEasyCount(Number(e.target.value))}
-              className="rounded-md border bg-background px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
-            >
-              {[0, 1, 2, 3, 4, 5].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex w-fit items-center gap-2 rounded-md border bg-background px-3 py-2">
-            <p className="text-sm font-medium text-muted-foreground">Medium</p>
-            <select
-              value={mediumCount}
-              onChange={(e) => setMediumCount(Number(e.target.value))}
-              className="rounded-md border bg-background px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
-            >
-              {[0, 1, 2, 3, 4, 5].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex w-fit items-center gap-2 rounded-md border bg-background px-3 py-2">
-            <p className="text-sm font-medium text-muted-foreground">Hard</p>
-            <select
-              value={hardCount}
-              onChange={(e) => setHardCount(Number(e.target.value))}
-              className="rounded-md border bg-background px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-ring"
-            >
-              {[0, 1, 2, 3, 4, 5].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="flex items-center gap-2">
-            <label className="whitespace-nowrap text-xs text-muted-foreground">Start Time</label>
-            <DateTimePicker value={startTime} onChange={setStartTime} placeholder="Pick start time" />
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="whitespace-nowrap text-xs text-muted-foreground">End Time</label>
-            <DateTimePicker value={endTime} onChange={setEndTime} placeholder="Pick end time" />
-          </div>
         </div>
         {submitError && <p className="mt-2 text-sm text-red-500">{submitError}</p>}
       </section>
@@ -402,12 +336,6 @@ export default function ExaminerPage() {
                 )}
                 <p className="mt-1 text-xs text-muted-foreground">
                   {myCandidates.length} candidate{myCandidates.length !== 1 ? "s" : ""}
-                  {interview.startTime && (
-                    <> · Start: {new Date(interview.startTime).toLocaleString("en-US")}</>
-                  )}
-                  {interview.endTime && (
-                    <> · End: {new Date(interview.endTime).toLocaleString("en-US")}</>
-                  )}
                 </p>
               </div>
               <div className="flex flex-col items-end gap-2">
