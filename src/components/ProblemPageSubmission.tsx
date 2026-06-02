@@ -1,7 +1,7 @@
 "use client";
 import { formatDate } from '@/helpers/formatDate';
 import { IProblem } from '@/models/Problem';
-import { ApiResponse, codeSubmissionResultType } from '@/types/ApiResponse';
+import { codeSubmissionResultType } from '@/types/ApiResponse';
 import axios from 'axios';
 import { ChevronDown, Clock4, Cpu } from 'lucide-react'
 import React, { useEffect, useState } from 'react'
@@ -29,7 +29,7 @@ export default function ProblemPageSubmission({ theme, problemInfo, setCurrentTa
 
       setLoading(true);
       try {
-        // 調用新的 API：GET /api/v1/submissions?problemId={problemId}&userId={userId}
+        // 調用?��? API：GET /api/v1/submissions?problemId={problemId}&userId={userId}
         const res = await axios.get(
           `${API_BASE_URL}/api/v1/users/${session.user.username}/submissions`,
           {
@@ -40,36 +40,41 @@ export default function ProblemPageSubmission({ theme, problemInfo, setCurrentTa
         );
 
         const submissions = res.data.submissions || res.data.items || res.data;
-        // 篩選出該題目的提交
-        const problemSubmissions = Array.isArray(submissions)
+        const problemSubmissions: codeSubmissionResultType[] = Array.isArray(submissions)
           ? submissions
-            .map((s: Record<string, unknown>) => ({
-              ...s,
-              id: String(s.submission_id ?? s.id ?? ""),
-              problemId: Number(s.problem_id ?? s.problemId ?? 0),
-              createdAt: String(s.submitted_at ?? s.createdAt ?? new Date().toISOString()),
-              compileMessage: String(s.compile_message ?? s.compileMessage ?? ""),
-              time: Number(s.metrics && typeof s.metrics === "object" ? (s.metrics as Record<string, unknown>).execution_time_ms ?? 0 : 0) / 1000,
-              memory: Number(s.metrics && typeof s.metrics === "object" ? (s.metrics as Record<string, unknown>).memory_usage_kb ?? 0 : 0) / 1024,
-            }))
-            .filter((s: Record<string, unknown>) => String(s.problemId) === String(problemInfo._id))
+            .map((s: Record<string, unknown>): codeSubmissionResultType => {
+              const metrics = s.metrics && typeof s.metrics === "object" ? s.metrics as Record<string, unknown> : {};
+              const rawStatus = String(s.status ?? "PENDING");
+              return {
+                _id: String(s.submission_id ?? s.id ?? ""),
+                userId: String(s.user_id ?? s.userId ?? session.user._id ?? ""),
+                problemId: String(s.problem_id ?? s.problemId ?? ""),
+                status: rawStatus === "ACCEPTED" ? "Accepted" : rawStatus,
+                language: String(s.language ?? ""),
+                sourceCode: String(s.source_code ?? s.sourceCode ?? ""),
+                createdAt: new Date(String(s.submitted_at ?? s.createdAt ?? new Date().toISOString())),
+                time: Number(metrics.execution_time_ms ?? 0) / 1000,
+                memory: Number(metrics.memory_usage_kb ?? 0) / 1024,
+              };
+            })
+            .filter((s) => String(s.problemId) === String(problemInfo._id))
           : [];
 
-        setSubmission(problemSubmissions as codeSubmissionResultType[]);
+        setSubmission(problemSubmissions);
       } catch (error) {
         if (axios.isAxiosError(error) && error.response) {
-          toast.error(error.response.data.message || "錯誤：取得提交紀錄失敗");
-          console.log("取得提交紀錄失敗: ", error.response.data.message);
+          toast.error(error.response.data.message || "Failed to load submissions.");
+          console.log("Failed to load submissions:", error.response.data.message);
         } else {
-          toast.error("錯誤：取得提交紀錄");
-          console.log("取得提交紀錄出錯: ", error);
+          toast.error("Failed to load submissions.");
+          console.log("Failed to load submissions:", error);
         }
       } finally {
         setLoading(false);
       }
     }
     fetchSubmission();
-  }, [session?.user?.username, session?.user?.accessToken, problemInfo._id]);
+  }, [session?.user?._id, session?.user?.username, session?.user?.accessToken, problemInfo._id]);
 
   const handleClick = (ele: codeSubmissionResultType) => {
     if (!submission) return;
