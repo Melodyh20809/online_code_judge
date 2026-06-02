@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import Link from "next/link";
 import { signIn } from "next-auth/react";
 
 export default function SignInPage() {
@@ -39,7 +38,7 @@ export default function SignInPage() {
     if (!result) return;
 
     if (result?.error) {
-      setError("Invalid username or password.");
+      setError(result.error === "CredentialsSignin" ? "Invalid username or password." : result.error);
       setIsSubmitting(false);
       return;
     }
@@ -82,13 +81,6 @@ export default function SignInPage() {
         >
           {isSubmitting ? "Signing in..." : "Sign in"}
         </button>
-
-        <p className="text-sm text-muted-foreground">
-          Do not have an account?{" "}
-          <Link href="/sign-up" className="underline">
-            Sign up
-          </Link>
-        </p>
       </form>
     </div>
   );

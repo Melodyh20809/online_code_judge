@@ -1,14 +1,19 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import Editor from "@monaco-editor/react";
 import axios from "axios";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMockData } from "@/hooks/useMockData";
 import { canAccessQuestion } from "@/lib/access";
-import { getCandidateAssignments, type CandidateAssignment } from "@/lib/candidateApi";
+import {
+  getCandidateAssignments,
+  getMyInterviewCandidate,
+  type CandidateAssignment,
+  type CandidateInterviewRecord,
+} from "@/lib/candidateApi";
 import { getQuestionById, fetchQuestionDetail, type QuestionDetail } from "@/lib/mockData";
 import { toast } from "sonner";
 
@@ -49,48 +54,99 @@ const FINAL_STATUSES = new Set([
   "INTERNAL_ERROR",
 ]);
 
-function buildStarterCode(language: string, functionName?: string) {
-  const safeFunctionName = (functionName || "solve").replace(/[^a-zA-Z0-9_$]/g, "") || "solve";
+function buildStarterCode(language: string) {
   if (language === "python") {
     return [
-      "from typing import *",
-      "",
-      "class Solution:",
-      `    def ${safeFunctionName}(self, nums1: List[int], nums2: List[int]) -> float:`,
-      "        # TODO: implement",
-      "        pass",
+      "def solve(input: str):",
+      "    # input is the raw test case string from the backend.",
+      "    # Parse it yourself, then return the answer.",
+      "    return \"\"",
       "",
     ].join("\n");
   }
   if (language === "cpp") {
     return [
-      "#include <vector>",
+      "#include <bits/stdc++.h>",
       "using namespace std;",
       "",
-      "class Solution {",
-      "public:",
-      `    double ${safeFunctionName}(vector<int>& nums1, vector<int>& nums2) {`,
-      "        // TODO: implement",
-      "        return 0.0;",
-      "    }",
-      "};",
+      "int main() {",
+      "    ios::sync_with_stdio(false);",
+      "    cin.tie(nullptr);",
+      "",
+      "    // Read the raw test case from standard input, parse it, then print the answer.",
+      "    return 0;",
+      "}",
+      "",
+    ].join("\n");
+  }
+  if (language === "c") {
+    return [
+      "#include <stdio.h>",
+      "",
+      "int main(void) {",
+      "    /* Read the raw test case from stdin, parse it, then print the answer. */",
+      "    return 0;",
+      "}",
       "",
     ].join("\n");
   }
   return [
-    "/**",
-    " * @param {number[]} nums1",
-    " * @param {number[]} nums2",
-    " * @return {number}",
-    " */",
-    `var ${safeFunctionName} = function(nums1, nums2) {`,
-    "  // TODO: implement",
-    "};",
-    "",
-    "module.exports = {",
-    `  ${safeFunctionName},`,
+    "function solve(input) {",
+    "  // input is the raw test case string from the backend.",
+    "  // Parse it yourself, then return the answer.",
+    "  return \"\";",
     "}",
+    "",
+    "module.exports = { solve };",
   ].join("\n");
+}
+
+function shouldNormalizeStructuredReturn(detail?: QuestionDetail | null) {
+  const sampleOutput = detail?.sampleTestCases[0]?.output?.trim() ?? "";
+  return sampleOutput.startsWith("[") || sampleOutput.startsWith("{");
+}
+
+function prepareSourceCodeForJudge(language: string, code: string, detail?: QuestionDetail | null) {
+  if (!shouldNormalizeStructuredReturn(detail)) {
+    return code;
+  }
+
+  if (language === "python") {
+    return [
+      code,
+      "",
+      "# Frontend adapter: backend writes str(solve(input)), so normalize common structured returns.",
+      "__candidate_solve = solve",
+      "def solve(input: str):",
+      "    result = __candidate_solve(input)",
+      "    if isinstance(result, (list, dict)):",
+      "        import json",
+      "        return json.dumps(result, separators=(',', ':'))",
+      "    return result",
+      "",
+    ].join("\n");
+  }
+
+  if (language === "javascript") {
+    return [
+      code,
+      "",
+      "// Frontend adapter: backend writes String(solve(input)), so normalize common structured returns.",
+      "const __candidateSolve = module.exports.solve || module.exports;",
+      "module.exports = {",
+      "  async solve(input) {",
+      "    const result = await __candidateSolve(input);",
+      "    if (Array.isArray(result) || (result && typeof result === 'object')) {",
+      "      return JSON.stringify(result);",
+      "    }",
+      "    return result;",
+      "  },",
+      "};",
+      "",
+    ].join("\n");
+  }
+
+  return code;
 }
 
 function renderDescription(description: string, title?: string) {
@@ -129,13 +185,21 @@ function renderDescription(description: string, title?: string) {
   });
 }
 
+function formatRemainingTime(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  return [hours, minutes, secs].map((value) => value.toString().padStart(2, "0")).join(":");
+}
+
 export default function QuestionPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { sessionUser, isLoading: isLoadingUser, isAuthenticated } = useCurrentUser();
   const { assignments, questions, users, isLoading: isLoadingData } = useMockData();
   const [sourceCode, setSourceCode] = useState<string>("");
-  const [language, setLanguage] = useState<string>("javascript");
+  const [language, setLanguage] = useState<string>("python");
   const [leftTab, setLeftTab] = useState<"description" | "result">("description");
   const [submissionHistory, setSubmissionHistory] = useState<SubmissionResult[]>([]);
   const [selectedSubmission, setSelectedSubmission] = useState<SubmissionResult | null>(null);
@@ -143,9 +207,13 @@ export default function QuestionPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [questionDetail, setQuestionDetail] = useState<QuestionDetail | null>(null);
   const [candidateAssignments, setCandidateAssignments] = useState<CandidateAssignment[]>([]);
+  const [interviewCandidate, setInterviewCandidate] = useState<CandidateInterviewRecord | null>(null);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [isLoadingCandidateAssignments, setIsLoadingCandidateAssignments] = useState(false);
 
   const questionId = Number(params.id);
+  const jobIdParam = searchParams.get("jobId");
+  const interviewId = jobIdParam ? Number(jobIdParam) : null;
   const question = useMemo(() => getQuestionById(questions, questionId), [questionId, questions]);
   const token = sessionUser?.accessToken || null;
 
@@ -159,12 +227,12 @@ export default function QuestionPage() {
   useEffect(() => {
     if (!questionDetail) return;
     if (sourceCode.trim().length > 0) return;
-    setSourceCode(buildStarterCode(language, questionDetail.functionName));
+    setSourceCode(buildStarterCode(language));
   }, [questionDetail, sourceCode, language]);
 
   const handleLanguageChange = (nextLanguage: string) => {
     setLanguage(nextLanguage);
-    setSourceCode(buildStarterCode(nextLanguage, questionDetail?.functionName));
+    setSourceCode(buildStarterCode(nextLanguage));
   };
 
   const resolvedUserId =
@@ -211,6 +279,44 @@ export default function QuestionPage() {
     };
   }, [resolvedUserId, sessionUser?.accessToken, sessionUser?.role]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowSeconds(Math.floor(Date.now() / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (
+      !interviewId ||
+      Number.isNaN(interviewId) ||
+      (sessionUser?.role !== "CANDIDATE" && sessionUser?.role !== "USER")
+    ) {
+      setInterviewCandidate(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadInterviewCandidate = async () => {
+      try {
+        const loadedInterviewCandidate = await getMyInterviewCandidate(interviewId);
+        if (!isMounted) return;
+        setInterviewCandidate(loadedInterviewCandidate);
+      } catch {
+        if (!isMounted) return;
+        setInterviewCandidate(null);
+      }
+    };
+
+    void loadInterviewCandidate();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [interviewId, sessionUser?.role]);
+
   if (isLoadingUser || isLoadingData || isLoadingCandidateAssignments) {
     return <div className="p-8">Loading...</div>;
   }
@@ -230,7 +336,9 @@ export default function QuestionPage() {
   }
 
   const hasCandidateAssignment = candidateAssignments.some(
-    (assignment) => assignment.problemId === questionId
+    (assignment) =>
+      assignment.problemId === questionId &&
+      (!interviewId || Number.isNaN(interviewId) || assignment.jobId === interviewId)
   );
 
   if (
@@ -247,9 +355,21 @@ export default function QuestionPage() {
     return <div className="p-8">You do not have access rights.</div>;
   }
 
+  const remainingSeconds =
+    interviewCandidate?.endTime == null ? null : Math.max(interviewCandidate.endTime - nowSeconds, 0);
+  const isInterviewEnded = remainingSeconds != null && remainingSeconds <= 0;
+  const isCandidateInterviewQuestion =
+    (sessionUser.role === "CANDIDATE" || sessionUser.role === "USER") &&
+    interviewId != null &&
+    !Number.isNaN(interviewId);
+
   const handleSubmit = async () => {
     if (!sessionUser || !question) {
       toast.error("Unable to submit right now.");
+      return;
+    }
+    if (isInterviewEnded) {
+      toast.error("Interview time is over. Submission is disabled.");
       return;
     }
 
@@ -259,7 +379,7 @@ export default function QuestionPage() {
         `${API_BASE_URL}/api/v1/submissions`,
         {
           problem_id: questionId,
-          source_code: sourceCode,
+          source_code: prepareSourceCodeForJudge(language, sourceCode, questionDetail),
           language,
         },
         {
@@ -337,6 +457,10 @@ export default function QuestionPage() {
       toast.error("Unable to run right now.");
       return;
     }
+    if (isInterviewEnded) {
+      toast.error("Interview time is over. Run is disabled.");
+      return;
+    }
 
     setIsRunning(true);
     try {
@@ -344,7 +468,7 @@ export default function QuestionPage() {
         `${API_BASE_URL}/api/v1/judge/run`,
         {
           problem_id: questionId,
-          source_code: sourceCode,
+          source_code: prepareSourceCodeForJudge(language, sourceCode, questionDetail),
           language,
         },
         {
@@ -353,22 +477,19 @@ export default function QuestionPage() {
       );
 
       const result = response.data ?? {};
-      const runResult: SubmissionResult = {
-        id: `run-${Date.now()}`,
-        status: String(result.status ?? "INTERNAL_ERROR"),
-        score: Number(result.score ?? 0),
-        executionTimeMs: Number(result.executionTimeMs ?? 0) || null,
-        memoryUsageKb: null,
-        passedCases: result.status === "ACCEPTED" ? 1 : 0,
-        totalCases: 1,
-        compileMessage: String(result.stderr ?? ""),
-        submittedAt: new Date().toISOString(),
-      };
+      const status = String(result.status ?? "INTERNAL_ERROR");
+      const executionTimeMs = Number(result.executionTimeMs ?? 0) || null;
+      const runMessage = String(result.stderr ?? "");
 
-      setSubmissionHistory((prev) => [runResult, ...prev]);
-      setSelectedSubmission(runResult);
-      setLeftTab("result");
-      toast.success("Sample run finished.");
+      if (status === "ACCEPTED") {
+        toast.success("Run test passed.", {
+          description: executionTimeMs != null ? `Public sample passed in ${executionTimeMs} ms.` : "Public sample passed.",
+        });
+      } else {
+        toast.error("Run test failed.", {
+          description: runMessage || `Public sample result: ${status}.`,
+        });
+      }
     } catch (error) {
       if (axios.isAxiosError(error)) {
         toast.error(error.response?.data?.message || "Run failed.");
@@ -380,9 +501,9 @@ export default function QuestionPage() {
     }
   };
 
-  const latestResult = submissionHistory[0] ?? null;
+  const latestResult = selectedSubmission ?? submissionHistory[0] ?? null;
   const bestScore = submissionHistory.length > 0 ? Math.max(...submissionHistory.map((s) => s.score)) : null;
-  const displayResult = selectedSubmission;
+  const displayResult = selectedSubmission ?? submissionHistory[0] ?? null;
   const hasExampleInDescription = Boolean(
     questionDetail?.description && /(^|\n)\s*#{0,3}\s*example\b/i.test(questionDetail.description)
   );
@@ -395,7 +516,13 @@ export default function QuestionPage() {
         <div className="flex items-center border-b">
           <button
             type="button"
-            onClick={() => router.back()}
+            onClick={() => {
+              if (isCandidateInterviewQuestion) {
+                router.push(`/candidates/${resolvedUserId}/${interviewId}`);
+                return;
+              }
+              router.back();
+            }}
             className="px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus:outline-none"
           >
             Back
@@ -455,6 +582,14 @@ export default function QuestionPage() {
                     </div>
                   )}
 
+                  <div className="mt-5 rounded-md border bg-background p-3 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">Input handling</p>
+                    <p className="mt-1">
+                      Run and Submit pass each backend test case as one raw input string. Parse that string manually;
+                      parameters shown in examples are not passed as separate function arguments.
+                    </p>
+                  </div>
+
                 </>
               ) : (
                 <p className="mt-4 text-sm text-muted-foreground">Loading description...</p>
@@ -462,13 +597,15 @@ export default function QuestionPage() {
             </>
           )}
 
-          {leftTab === "result" && submissionHistory.length === 0 && (
+          {leftTab === "result" && !displayResult && (
             <div className="flex h-full items-center justify-center">
-              <p className="text-sm text-muted-foreground">No submission yet. Submit your code to see results.</p>
+              <p className="text-sm text-muted-foreground">
+                No submission yet. Submit your code to see official results.
+              </p>
             </div>
           )}
 
-          {leftTab === "result" && submissionHistory.length > 0 && displayResult && (
+          {leftTab === "result" && displayResult && (
             <div className="space-y-5">
               {/* Current Result */}
               <div className="space-y-4">
@@ -567,17 +704,32 @@ export default function QuestionPage() {
 
       {/* Right Panel - Code Editor */}
       <section className="rounded-md border bg-[var(--sidebar-accent)] p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold">Code Editor</h2>
-          <select
-            value={language}
-            onChange={(e) => handleLanguageChange(e.target.value)}
-            className="rounded-md border bg-background px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="python">Python</option>
-            <option value="cpp">C++</option>
-            <option value="javascript">JavaScript</option>
-          </select>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-semibold">Code Editor</h2>
+            {isCandidateInterviewQuestion && (
+              <p className={`mt-1 text-xs font-medium ${isInterviewEnded ? "text-red-600" : "text-muted-foreground"}`}>
+                Remaining Time: {remainingSeconds == null ? "Not started" : formatRemainingTime(remainingSeconds)}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {isInterviewEnded && (
+              <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-700">
+                Time over
+              </span>
+            )}
+            <select
+              value={language}
+              onChange={(e) => handleLanguageChange(e.target.value)}
+              className="rounded-md border bg-background px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="python">Python</option>
+              <option value="c">C</option>
+              <option value="cpp">C++</option>
+              <option value="javascript">JavaScript</option>
+            </select>
+          </div>
         </div>
         <div className="h-[58vh] overflow-hidden rounded-md border">
           <Editor
@@ -598,7 +750,7 @@ export default function QuestionPage() {
           <button
             type="button"
             onClick={handleRun}
-            disabled={isRunning || isSubmitting}
+            disabled={isRunning || isSubmitting || isInterviewEnded}
             className="rounded-md bg-primary/60 px-4 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/80"
           >
             {isRunning ? "Running..." : "Run"}
@@ -606,7 +758,7 @@ export default function QuestionPage() {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting || isRunning}
+            disabled={isSubmitting || isRunning || isInterviewEnded}
             className="rounded-md bg-green-600/80 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? "Submitting..." : "Submit"}

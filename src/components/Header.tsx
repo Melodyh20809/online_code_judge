@@ -24,7 +24,7 @@ export default function Header() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showProfile]);
-  const { theme, setTheme, systemTheme, resolvedTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme();
   const pathname = usePathname();
   const { data: session, status } = useSession();
   const sessionUser = session?.user ?? null;
@@ -53,11 +53,7 @@ export default function Header() {
 
   return (
     <header className="relative z-30 flex h-12 w-full items-center justify-between border-b-2 px-8">
-      {theme === "dark" ? (
-        <img src="/navLogo dark.png" alt="" className="h-6" />
-      ) : (
-        <img src="/navLogo light.png" alt="" className="h-6" />
-      )}
+      <div className="h-6 w-6" aria-hidden="true" />
       {pathname.startsWith("/problem/") ? (
         <NavRunButtonsContainer theme={theme} session={null} />
       ) : (

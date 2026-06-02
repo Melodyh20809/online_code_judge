@@ -42,6 +42,14 @@ export type CandidateAssignment = {
   };
 };
 
+export type CandidateInterviewRecord = {
+  id: number;
+  jobId: number;
+  userId: string;
+  startTime: number | null;
+  endTime: number | null;
+};
+
 const authHeaders = (token?: string | null): HeadersInit =>
   token ? { Authorization: `Bearer ${token}` } : {};
 
@@ -101,6 +109,21 @@ export async function getCandidateAssignments(
     headers: authHeaders(token),
   });
 
+  if (response.status === 401 || response.status === 403) {
+    const fallbackResponse = await fetch(
+      `/api/assignments/user/${encodeURIComponent(userId)}`,
+      { cache: "no-store" }
+    );
+
+    if (!fallbackResponse.ok) {
+      throw new Error(await getErrorMessage(fallbackResponse));
+    }
+
+    return extractList(await fallbackResponse.json()).map((assignment) =>
+      mapAssignment(assignment as BackendAssignmentApi)
+    );
+  }
+
   if (!response.ok) {
     throw new Error(await getErrorMessage(response));
   }
@@ -124,4 +147,33 @@ export async function getCandidateSubmissions(username: string, token?: string |
   }
 
   return extractList(await response.json());
+}
+
+export async function getMyInterviewCandidate(jobId: number): Promise<CandidateInterviewRecord> {
+  const response = await fetch(`/api/interview-candidates/me?jobId=${encodeURIComponent(jobId)}`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+
+  return response.json() as Promise<CandidateInterviewRecord>;
+}
+
+export async function enterInterview(payload: {
+  jobId: number;
+  questionCount: number;
+}): Promise<CandidateInterviewRecord> {
+  const response = await fetch("/api/interview-candidates/enter", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+
+  return response.json() as Promise<CandidateInterviewRecord>;
 }
