@@ -2,6 +2,8 @@
 
 此版本為 `online_code_judge-main` 前端，已調整為可和 `cn_backend-master` 的 `/api/v1` 後端 API 整合使用。後端程式碼不需要為本次前端整合修改；前端透過環境變數指定後端網址。
 
+vercel 部屬後的網址: https://online-code-judge-phi.vercel.app/
+
 ## 本版更新重點
 
 ### 1. 後端 API 整合
