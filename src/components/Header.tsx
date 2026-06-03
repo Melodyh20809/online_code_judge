@@ -62,12 +62,6 @@ export default function Header() {
       <div className="flex items-center gap-4">
         {isGuest ? (
           <div className="flex items-center gap-4">
-            <Link href="/sign-up">
-              <Button variant="outline" className="cursor-pointer font-semibold">
-                Sign up
-              </Button>
-            </Link>
-            <p>or</p>
             <Link href="/sign-in">
               <Button variant="outline" className="cursor-pointer font-semibold">
                 Sign in
