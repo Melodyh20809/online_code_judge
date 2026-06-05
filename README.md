@@ -181,3 +181,10 @@ npm run lint
 ```powershell
 npm run build
 ```
+
+執行 test:
+
+```powershell
+npm test
+```
+
