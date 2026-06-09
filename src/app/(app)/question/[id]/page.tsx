@@ -10,6 +10,7 @@ import { useMockData } from "@/hooks/useMockData";
 import { canAccessQuestion } from "@/lib/access";
 import {
   getCandidateAssignments,
+  getCandidateSubmissions,
   getMyInterviewCandidate,
   type CandidateAssignment,
   type CandidateInterviewRecord,
@@ -31,6 +32,18 @@ type SubmissionResult = {
   compileMessage: string;
   submittedAt: string;
 };
+
+const mapBackendSubmissionToResult = (submission: Record<string, unknown>): SubmissionResult => ({
+  id: String(submission.submission_id ?? submission.id ?? `submission-${Date.now()}`),
+  status: String(submission.status ?? "PENDING"),
+  score: Number(submission.score ?? 0),
+  executionTimeMs: Number((submission.metrics as Record<string, unknown> | undefined)?.execution_time_ms ?? 0) || null,
+  memoryUsageKb: Number((submission.metrics as Record<string, unknown> | undefined)?.memory_usage_kb ?? 0) || null,
+  passedCases: Number(submission.passedCases ?? submission.passed_cases ?? 0),
+  totalCases: Number(submission.totalCases ?? submission.total_cases ?? 0),
+  compileMessage: String(submission.compile_message ?? submission.compileMessage ?? ""),
+  submittedAt: String(submission.submitted_at ?? submission.createdAt ?? ""),
+});
 
 const statusConfig: Record<string, { label: string; color: string }> = {
   PENDING: { label: "Pending", color: "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300" },
@@ -316,6 +329,96 @@ export default function QuestionPage() {
       isMounted = false;
     };
   }, [interviewId, sessionUser?.role]);
+
+  useEffect(() => {
+    if (!sessionUser?.username || !sessionUser.accessToken || !questionId) {
+      setSubmissionHistory([]);
+      setSelectedSubmission(null);
+      return;
+    }
+
+    const isCandidateInterview =
+      (sessionUser.role === "CANDIDATE" || sessionUser.role === "USER") &&
+      interviewId != null &&
+      !Number.isNaN(interviewId);
+
+    if (isCandidateInterview && !interviewCandidate) {
+      return;
+    }
+
+    let isMounted = true;
+    const username = sessionUser.username;
+    const accessToken = sessionUser.accessToken;
+
+    const loadSubmissionHistory = async () => {
+      try {
+        const loadedSubmissions = await getCandidateSubmissions(username, accessToken);
+
+        if (!isMounted) return;
+
+        const candidateHistory = loadedSubmissions
+          .filter((submission) => Number(submission.problem_id ?? submission.problemId ?? 0) === questionId)
+          .filter((submission) => {
+            if (!isCandidateInterview) return true;
+            if (interviewCandidate?.startTime == null || interviewCandidate.endTime == null) {
+              return false;
+            }
+            const submittedAt = Date.parse(String(submission.submitted_at ?? submission.createdAt ?? ""));
+            if (Number.isNaN(submittedAt)) return false;
+            return (
+              submittedAt >= interviewCandidate.startTime * 1000 &&
+              submittedAt <= interviewCandidate.endTime * 1000
+            );
+          });
+
+        const filteredHistory = await Promise.all(
+          candidateHistory.map(async (submission) => {
+            const submissionId = String(submission.submission_id ?? submission.id ?? "");
+            if (!submissionId) {
+              return mapBackendSubmissionToResult(submission);
+            }
+
+            try {
+              const detailRes = await axios.get(`${API_BASE_URL}/api/v1/submissions/${submissionId}`, {
+                headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+              });
+              return mapBackendSubmissionToResult(detailRes.data ?? submission);
+            } catch {
+              return mapBackendSubmissionToResult(submission);
+            }
+          })
+        );
+
+        filteredHistory
+          .sort((a, b) => (Date.parse(b.submittedAt) || 0) - (Date.parse(a.submittedAt) || 0));
+
+        setSubmissionHistory(filteredHistory);
+        setSelectedSubmission((current) => {
+          if (current && filteredHistory.some((submission) => submission.id === current.id)) {
+            return current;
+          }
+          return filteredHistory[0] ?? null;
+        });
+      } catch {
+        if (!isMounted) return;
+        setSubmissionHistory([]);
+        setSelectedSubmission(null);
+      }
+    };
+
+    void loadSubmissionHistory();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    interviewCandidate,
+    interviewId,
+    questionId,
+    sessionUser?.accessToken,
+    sessionUser?.role,
+    sessionUser?.username,
+  ]);
 
   if (isLoadingUser || isLoadingData || isLoadingCandidateAssignments) {
     return <div className="p-8">Loading...</div>;
