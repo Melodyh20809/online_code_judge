@@ -15,6 +15,9 @@ const getHomePathFromToken = (token: AuthToken | null) => {
   return `/candidates/${token?._id}`;
 };
 
+const matchesRoute = (pathname: string, route: string) =>
+  pathname === route || pathname.startsWith(`${route}/`);
+
 export async function middleware(request: NextRequest) {
   const token = (await getToken({
     req: request,
@@ -30,10 +33,10 @@ export async function middleware(request: NextRequest) {
   }
 
   const isProtected =
-    url.pathname.startsWith("/examiner") ||
-    url.pathname.startsWith("/questioner") ||
-    url.pathname.startsWith("/candidates") ||
-    url.pathname.startsWith("/question");
+    matchesRoute(url.pathname, "/examiner") ||
+    matchesRoute(url.pathname, "/questioner") ||
+    matchesRoute(url.pathname, "/candidates") ||
+    matchesRoute(url.pathname, "/question");
 
   if (!token && isProtected) {
     return NextResponse.redirect(new URL("/sign-in", request.url));
@@ -47,14 +50,14 @@ export async function middleware(request: NextRequest) {
   // Role-based guards
   if (token) {
     const role = token.role?.toUpperCase();
-    if (url.pathname.startsWith("/examiner") && role !== "ADMIN" && role !== "EXAMINER") {
+    if (matchesRoute(url.pathname, "/examiner") && role !== "ADMIN" && role !== "EXAMINER") {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }
-    if (url.pathname.startsWith("/questioner") && role !== "ADMIN" && role !== "QUESTIONER") {
+    if (matchesRoute(url.pathname, "/questioner") && role !== "ADMIN" && role !== "QUESTIONER") {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }
     if (
-      url.pathname.startsWith("/candidates") &&
+      matchesRoute(url.pathname, "/candidates") &&
       role !== "ADMIN" &&
       role !== "CANDIDATE" &&
       role !== "USER"
@@ -62,7 +65,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }
     if (
-      url.pathname.startsWith("/question") &&
+      matchesRoute(url.pathname, "/question") &&
       role !== "ADMIN" &&
       role !== "CANDIDATE" &&
       role !== "USER"

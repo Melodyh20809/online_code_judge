@@ -510,7 +510,7 @@ export default function ExaminerPage() {
                                     {availableQuestions.find((q) => q.id === selectedQuestionId[editKey])?.title ?? "Select a question..."}
                                   </span>
                                 ) : (
-                                  <span className="text-muted-foreground">Random Assign or select a question</span>
+                                  <span>Random Assign</span>
                                 )}
                               </button>
                             </PopoverTrigger>
@@ -572,8 +572,7 @@ export default function ExaminerPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              const selection = selectedQuestionId[editKey];
-                              if (!selection) return;
+                              const selection = selectedQuestionId[editKey] || "random";
 
                               let qId: number;
                               if (selection === "random") {
@@ -591,7 +590,7 @@ export default function ExaminerPage() {
                               handleAssignQuestion(candidate.userId, qId, interview.id);
                               setSelectedQuestionId((prev) => ({ ...prev, [editKey]: "" }));
                             }}
-                            disabled={!selectedQuestionId[editKey]}
+                            disabled={availableQuestions.length === 0}
                             className="whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-80"
                           >
                             Assign
