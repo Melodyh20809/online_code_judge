@@ -89,13 +89,16 @@ const uiDifficultyToApi = (difficulty: Difficulty): ApiDifficulty => {
   return "EASY";
 };
 
+const normalizeRole = (role?: string | null) => role?.trim().toUpperCase();
+
 export default function QuestionerPage() {
   const { data: session, status } = useSession();
   const sessionUser = session?.user ?? null;
+  const sessionUserRole = normalizeRole(sessionUser?.role);
   const isAuthenticated = status === "authenticated";
   const isLoadingUser = status === "loading";
   const canManageProblems =
-    sessionUser?.role === "ADMIN" || sessionUser?.role === "QUESTIONER";
+    sessionUserRole === "ADMIN" || sessionUserRole === "QUESTIONER";
   const accessToken = sessionUser?.accessToken;
 
   const [form, setForm] = useState<QuestionForm>(() => createEmptyForm());

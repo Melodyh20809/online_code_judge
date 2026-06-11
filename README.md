@@ -188,3 +188,7 @@ npm run build
 npm test
 ```
 
+## 最近更新
+
+- 修正 questioner portal 跳轉問題：middleware 現在會用完整路徑區段判斷 `/question` 和 `/questioner`，避免 `QUESTIONER` 進入 `/questioner` 時被誤判成 `/question` 而造成 `ERR_TOO_MANY_REDIRECTS`。
+- 更新 Candidate Accounts 建立流程：新增 candidate row 或批次 Generate 時，預設密碼改為每列不同的 16 碼安全隨機密碼，包含大小寫字母、數字與符號；畫面欄位也改為 `Generated Password`。

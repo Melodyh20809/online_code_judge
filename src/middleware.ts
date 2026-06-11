@@ -7,16 +7,18 @@ type AuthToken = {
   role?: string;
 };
 
+const normalizeRole = (role?: string) => role?.trim().toUpperCase();
+
+const matchesPathSegment = (pathname: string, segment: string) =>
+  pathname === segment || pathname.startsWith(`${segment}/`);
+
 const getHomePathFromToken = (token: AuthToken | null) => {
-  const role = token?.role?.toUpperCase();
+  const role = normalizeRole(token?.role);
   if (role === "ADMIN" || role === "QUESTIONER") return "/questioner";
   if (role === "EXAMINER") return "/examiner";
   if (role === "USER" || role === "CANDIDATE") return `/candidates/${token?._id}`;
   return `/candidates/${token?._id}`;
 };
-
-const matchesRoute = (pathname: string, route: string) =>
-  pathname === route || pathname.startsWith(`${route}/`);
 
 export async function middleware(request: NextRequest) {
   const token = (await getToken({
@@ -33,10 +35,11 @@ export async function middleware(request: NextRequest) {
   }
 
   const isProtected =
-    matchesRoute(url.pathname, "/examiner") ||
-    matchesRoute(url.pathname, "/questioner") ||
-    matchesRoute(url.pathname, "/candidates") ||
-    matchesRoute(url.pathname, "/question");
+    matchesPathSegment(url.pathname, "/candidate-accounts") ||
+    matchesPathSegment(url.pathname, "/examiner") ||
+    matchesPathSegment(url.pathname, "/questioner") ||
+    matchesPathSegment(url.pathname, "/candidates") ||
+    matchesPathSegment(url.pathname, "/question");
 
   if (!token && isProtected) {
     return NextResponse.redirect(new URL("/sign-in", request.url));
@@ -49,15 +52,18 @@ export async function middleware(request: NextRequest) {
 
   // Role-based guards
   if (token) {
-    const role = token.role?.toUpperCase();
-    if (matchesRoute(url.pathname, "/examiner") && role !== "ADMIN" && role !== "EXAMINER") {
+    const role = normalizeRole(token.role);
+    if (matchesPathSegment(url.pathname, "/candidate-accounts") && role !== "ADMIN" && role !== "EXAMINER") {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }
-    if (matchesRoute(url.pathname, "/questioner") && role !== "ADMIN" && role !== "QUESTIONER") {
+    if (matchesPathSegment(url.pathname, "/examiner") && role !== "ADMIN" && role !== "EXAMINER") {
+      return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
+    }
+    if (matchesPathSegment(url.pathname, "/questioner") && role !== "ADMIN" && role !== "QUESTIONER") {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }
     if (
-      matchesRoute(url.pathname, "/candidates") &&
+      matchesPathSegment(url.pathname, "/candidates") &&
       role !== "ADMIN" &&
       role !== "CANDIDATE" &&
       role !== "USER"
@@ -65,7 +71,7 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL(getHomePathFromToken(token), request.url));
     }
     if (
-      matchesRoute(url.pathname, "/question") &&
+      matchesPathSegment(url.pathname, "/question") &&
       role !== "ADMIN" &&
       role !== "CANDIDATE" &&
       role !== "USER"
@@ -81,6 +87,7 @@ export const config = {
   matcher: [
     "/sign-in",
     "/sign-up",
+    "/candidate-accounts/:path*",
     "/examiner/:path*",
     "/questioner/:path*",
     "/candidates/:path*",
