@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { useSession } from "next-auth/react";
 
+const normalizeRole = (role?: string | null) => role?.trim().toUpperCase();
+
 export default function Home() {
   const router = useRouter();
   const { data: session, status } = useSession();
@@ -11,7 +13,7 @@ export default function Home() {
 
   const goPath = useMemo(() => {
     if (!user) return "/";
-    const role = user.role;
+    const role = normalizeRole(user.role);
     if (role === "ADMIN" || role === "QUESTIONER") return "/questioner";
     if (role === "EXAMINER") return "/examiner";
     return `/candidates/${user._id}`;

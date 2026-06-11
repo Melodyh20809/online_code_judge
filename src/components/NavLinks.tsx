@@ -21,7 +21,7 @@ export default function NavLinks({
     links.push({ href: "/examiner", label: "Examiner", active: pathname === "/examiner" });
     links.push({ href: "/examiner/report", label: "Report", active: pathname === "/examiner/report" });
   }
-  if (role === "ADMIN") {
+  if (role === "ADMIN" || role === "EXAMINER") {
     links.push({
       href: "/candidate-accounts",
       label: "Candidate Accounts",

@@ -36,11 +36,75 @@ type RawBackendUser = {
   isCandidate?: unknown;
 };
 
-const createRows = (count: number, startId = 1): CandidateAccountRow[] =>
+const PASSWORD_GROUPS = [
+  "ABCDEFGHJKLMNPQRSTUVWXYZ",
+  "abcdefghijkmnopqrstuvwxyz",
+  "23456789",
+  "!@#$%^&*+-_?",
+] as const;
+const PASSWORD_CHARACTERS = PASSWORD_GROUPS.join("");
+const GENERATED_PASSWORD_LENGTH = 16;
+const CANDIDATE_USERNAME_PREFIX = "candidate";
+
+const getRandomIndex = (maxExclusive: number) => {
+  const values = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(values);
+  return values[0] % maxExclusive;
+};
+
+const pickRandomCharacter = (characters: string) =>
+  characters[getRandomIndex(characters.length)];
+
+const shuffleCharacters = (characters: string[]) => {
+  const shuffled = [...characters];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = getRandomIndex(index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled.join("");
+};
+
+const generatePassword = () => {
+  const requiredCharacters = PASSWORD_GROUPS.map(pickRandomCharacter);
+  const remainingCharacters = Array.from(
+    { length: GENERATED_PASSWORD_LENGTH - requiredCharacters.length },
+    () => pickRandomCharacter(PASSWORD_CHARACTERS)
+  );
+
+  return shuffleCharacters([...requiredCharacters, ...remainingCharacters]);
+};
+
+const formatCandidateUsername = (candidateNumber: number) =>
+  `${CANDIDATE_USERNAME_PREFIX}${String(candidateNumber).padStart(3, "0")}`;
+
+const getCandidateUsernameNumber = (username: string) => {
+  const match = username.trim().match(/^candidate(\d+)$/i);
+  return match ? Number(match[1]) : null;
+};
+
+const getNextCandidateUsernameNumber = (
+  candidateUsers: CandidateUser[],
+  rows: CandidateAccountRow[] = []
+) => {
+  const maxExistingNumber = [...candidateUsers.map((user) => user.username), ...rows.map((row) => row.username)]
+    .map(getCandidateUsernameNumber)
+    .filter((value): value is number => value != null && Number.isFinite(value))
+    .reduce((max, value) => Math.max(max, value), 0);
+
+  return maxExistingNumber + 1;
+};
+
+const createRows = (
+  count: number,
+  startId = 1,
+  generatePasswords = true,
+  usernameStartNumber?: number
+): CandidateAccountRow[] =>
   Array.from({ length: count }, (_, index) => ({
     id: startId + index,
-    username: "",
-    password: "Candidate@123",
+    username:
+      usernameStartNumber == null ? "" : formatCandidateUsername(usernameStartNumber + index),
+    password: generatePasswords ? generatePassword() : "",
     status: "idle",
   }));
 
@@ -83,7 +147,7 @@ const normalizeUser = (user: RawBackendUser): CandidateUser => {
 export default function CandidateAccountsPage() {
   const { data: session, status } = useSession();
   const [count, setCount] = useState(3);
-  const [rows, setRows] = useState<CandidateAccountRow[]>(() => createRows(3));
+  const [rows, setRows] = useState<CandidateAccountRow[]>(() => createRows(3, 1, false));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
   const [candidateUsers, setCandidateUsers] = useState<CandidateUser[]>([]);
@@ -92,7 +156,8 @@ export default function CandidateAccountsPage() {
   const [candidateListError, setCandidateListError] = useState<string | null>(null);
 
   const sessionUser = session?.user ?? null;
-  const isAdmin = sessionUser?.role?.toUpperCase() === "ADMIN";
+  const role = sessionUser?.role?.trim().toUpperCase();
+  const canManageCandidateAccounts = role === "ADMIN" || role === "EXAMINER";
   const token = sessionUser?.accessToken;
   const nextRowId = useMemo(() => Math.max(0, ...rows.map((row) => row.id)) + 1, [rows]);
   const filteredCandidateUsers = useMemo(() => {
@@ -106,7 +171,7 @@ export default function CandidateAccountsPage() {
   }, [candidateSearch, candidateUsers]);
 
   const loadCandidateUsers = useCallback(async () => {
-    if (!isAdmin || !token) return;
+    if (!canManageCandidateAccounts || !token) return;
 
     setIsLoadingCandidates(true);
     setCandidateListError(null);
@@ -135,17 +200,26 @@ export default function CandidateAccountsPage() {
     } finally {
       setIsLoadingCandidates(false);
     }
-  }, [isAdmin, token]);
+  }, [canManageCandidateAccounts, token]);
 
   useEffect(() => {
     void loadCandidateUsers();
   }, [loadCandidateUsers]);
 
+  useEffect(() => {
+    setRows((currentRows) =>
+      currentRows.map((row) =>
+        row.password ? row : { ...row, password: generatePassword() }
+      )
+    );
+  }, []);
+
   const handleGenerateRows = () => {
     const safeCount = Math.max(1, Math.min(50, Number.isFinite(count) ? count : 1));
+    const usernameStartNumber = getNextCandidateUsernameNumber(candidateUsers);
     setCount(safeCount);
     setSummary(null);
-    setRows(createRows(safeCount));
+    setRows(createRows(safeCount, 1, true, usernameStartNumber));
   };
 
   const updateRow = (id: number, field: "username" | "password", value: string) => {
@@ -161,8 +235,8 @@ export default function CandidateAccountsPage() {
       ...currentRows,
       {
         id: nextRowId,
-        username: "",
-        password: "Candidate@123",
+        username: formatCandidateUsername(getNextCandidateUsernameNumber(candidateUsers, currentRows)),
+        password: generatePassword(),
         status: "idle",
       },
     ]);
@@ -238,12 +312,12 @@ export default function CandidateAccountsPage() {
     return <div className="p-8 text-sm text-muted-foreground">Loading...</div>;
   }
 
-  if (!isAdmin) {
+  if (!canManageCandidateAccounts) {
     return (
       <main className="mx-auto w-full max-w-3xl px-6 py-10">
         <h1 className="text-2xl font-semibold">Candidate Accounts</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Only admins can manage candidate accounts.
+          Only admins and examiners can manage candidate accounts.
         </p>
       </main>
     );
@@ -255,7 +329,10 @@ export default function CandidateAccountsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Candidate Accounts</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Create candidate login accounts with a default password.
+            Create candidate login accounts with generated passwords.
+          </p>
+          <p className="mt-1 text-sm text-amber-600">
+            Generated passwords are shown only once. Save them before refreshing this page.
           </p>
         </div>
         <div className="flex items-end gap-2">
@@ -282,7 +359,7 @@ export default function CandidateAccountsPage() {
           <div className="grid grid-cols-[56px_minmax(0,1fr)_minmax(0,1fr)_120px_56px] gap-3 border-b bg-muted/50 px-4 py-3 text-xs font-semibold uppercase text-muted-foreground">
             <span>#</span>
             <span>Username</span>
-            <span>Default Password</span>
+            <span>Generated Password</span>
             <span>Status</span>
             <span />
           </div>
@@ -305,7 +382,8 @@ export default function CandidateAccountsPage() {
                   onChange={(event) => updateRow(row.id, "password", event.target.value)}
                   disabled={isSubmitting}
                   required
-                  minLength={6}
+                  minLength={12}
+                  autoComplete="off"
                 />
                 <div className="pt-2 text-sm">
                   {row.status === "created" && <span className="text-green-600">Created</span>}
